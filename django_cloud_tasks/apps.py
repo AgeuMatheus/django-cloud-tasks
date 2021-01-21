@@ -26,6 +26,10 @@ class DCTConfig(AppConfig):
     @classmethod
     def task_handler_root_url(cls):
         return cls._settings().get('task_handler_root_url')
+    
+    @classmethod
+    def task_handler_base_url(cls):
+        return cls._settings().get('task_handler_base_url')
 
     @classmethod
     def execute_locally(cls):

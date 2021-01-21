@@ -324,7 +324,7 @@ class CloudTaskWrapper(object):
             'task': {
                 'httpRequest': {
                     'httpMethod': 'POST',
-                    'url': self._task_handler_url,
+                    'url': f'{DCTConfig.task_handler_base_url()}{self._task_handler_url}',
                     'headers': self.formatted_headers,
                     'oidcToken': {
                         "service_account_email": self._http_service_account
