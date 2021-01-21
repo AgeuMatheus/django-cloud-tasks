@@ -46,3 +46,7 @@ class DCTConfig(AppConfig):
     @classmethod
     def service_account_email(cls):
         return cls._settings().get('service_account_email')
+
+    @classmethod
+    def task_handler_base_url(cls):
+        return cls._settings().get('task_handler_base_url', '')
