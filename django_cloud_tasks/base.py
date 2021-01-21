@@ -212,7 +212,7 @@ class CloudTaskWrapper(object):
     def __init__(self, base_task, queue, data,
                  internal_task_name=None, task_handler_url=None,
                  is_remote=False, headers=None,
-                 http_service_account=None):
+                 service_account_email=None):
         self._base_task = base_task
         self._data = data
         self._queue = queue
@@ -222,15 +222,7 @@ class CloudTaskWrapper(object):
         self._handler_secret = DCTConfig.handler_secret()
         self._is_remote = is_remote
         self._headers = headers or {}
-        if http_service_account is None:
-            # Running AppEngineTask. Not running HTTP-task
-            self._http_service_account = http_service_account
-        elif type(http_service_account) == bool and http_service_account:
-            # Running HTTP-task with default service account
-            self._http_service_account = DCTConfig.http_service_account()
-        else:
-            # Running HTTP-task with specified service account.
-            self._http_service_account = http_service_account
+        self._service_account_email = service_account_email or DCTConfig.service_account_email()
         self.setup()
 
     def setup(self):
@@ -241,8 +233,8 @@ class CloudTaskWrapper(object):
             raise ValueError('Could not identify task handler URL of the worker service')
 
     def execute_local(self):
-        if self._http_service_account:
-            body = self.get_http_body()
+        if self._service_account_email:
+            body = self.get_cloudrun_body()
         else:
             body = self.get_appengine_body()
         return EmulatedTask(body=body, task_handler_url=self._task_handler_url).execute()
@@ -294,6 +286,17 @@ class CloudTaskWrapper(object):
         formatted[HANDLER_SECRET_HEADER_NAME] = self._handler_secret
         return formatted
 
+    
+    def get_converted_data(self):
+        payload = {
+            'internal_task_name': self._internal_task_name,
+            'data': self._data
+        }
+        payload = json.dumps(payload, cls=ComplexEncoder)
+        logger.debug('Creating task with body {0}'.format(payload), extra={'taskBody': payload})
+        base64_encoded_payload = base64.b64encode(payload.encode())
+        return base64_encoded_payload.decode()
+    
     def get_appengine_body(self):
         body = {
             'task': {
@@ -305,65 +308,40 @@ class CloudTaskWrapper(object):
             }
         }
 
-        payload = {
-            'internal_task_name': self._internal_task_name,
-            'data': self._data
-        }
-        payload = json.dumps(payload, cls=ComplexEncoder)
-        logger.debug('Creating task with body {0}'.format(payload),
-                    extra={'taskBody': payload
-                           })
-        base64_encoded_payload = base64.b64encode(payload.encode())
-        converted_payload = base64_encoded_payload.decode()
-
-        body['task']['appEngineHttpRequest']['body'] = converted_payload
+        body['task']['appEngineHttpRequest']['body'] = self.get_converted_data()
         return body
 
-    def get_http_body(self):
+    def get_cloudrun_body(self):
         body = {
             'task': {
                 'httpRequest': {
                     'httpMethod': 'POST',
-                    'url': f'{DCTConfig.task_handler_base_url()}{self._task_handler_url}',
+                    'url': self._task_handler_url,
                     'headers': self.formatted_headers,
                     'oidcToken': {
-                        "service_account_email": self._http_service_account
+                        "service_account_email": self._service_account_email
                     },
                 }
             }
         }
 
-        payload = {
-            'internal_task_name': self._internal_task_name,
-            'data': self._data
-        }
-        payload = json.dumps(payload, cls=ComplexEncoder)
-        logger.debug(
-            'Creating task with body {0}'.format(payload),
-             extra={'taskBody': payload}
-        )
-        base64_encoded_payload = base64.b64encode(payload.encode())
-        converted_payload = base64_encoded_payload.decode()
-
-        body['task']['httpRequest']['body'] = converted_payload
+        body['task']['httpRequest']['body'] = self.get_converted_data()
         return body
 
     def create_cloud_task(self):
-        if self._http_service_account:
-            body = self.get_http_body()
-        else:
-            body = self.get_appengine_body()
-        task = self._connection.tasks_endpoint.create(parent=self._cloud_task_queue_name, body=body)
-        return task
+        return self._connection.tasks_endpoint.create(
+            parent=self._cloud_task_queue_name,
+            body=self.get_cloudrun_body() if self._service_account_email else self.get_appengine_body()
+        )
 
 class RemoteCloudTask(object):
     def __init__(self, queue, handler, task_handler_url=None, headers=None,
-                 http_service_account=None):
+                 service_account_email=None):
         self.queue = queue
         self.handler = handler
         self.task_handler_url = task_handler_url or DCTConfig.task_handler_root_url()
         self.headers = headers
-        self.http_service_account = http_service_account
+        self.service_account_email = service_account_email
 
     def payload(self, payload):
         """
@@ -374,25 +352,25 @@ class RemoteCloudTask(object):
         task = CloudTaskWrapper(base_task=None, queue=self.queue, internal_task_name=self.handler,
                                 task_handler_url=self.task_handler_url,
                                 data=payload, is_remote=True, headers=self.headers,
-                                http_service_account=self.http_service_account)
+                                service_account_email=self.service_account_email)
         return task
 
     def __call__(self, *args, **kwargs):
         return self.payload(payload=kwargs)
 
 
-def remote_task(queue, handler, task_handler_url=None, http_service_account=None, **headers):
+def remote_task(queue, handler, task_handler_url=None, service_account_email=None, **headers):
     """
     Returns `RemoteCloudTask` instance. Can be used for scheduling tasks that are not available in the current scope
     :param queue: Queue name
     :param handler: Task handler function name
     :param task_handler_url: Entry point URL of the worker service for the task
-    :param http_service_account: If specified, will run a HTTP task with given service account.
+    :param service_account_email: If specified, will run a HTTP task with given service account.
                                  If not specified, will run AppEngineTask.
     :param headers: Headers that will be sent to the task handler
     :return: `CloudTaskWrapper` instance
     """
     task = RemoteCloudTask(queue=queue, handler=handler,
-                           task_handler_url=task_handler_url, http_service_account=http_service_account,
+                           task_handler_url=task_handler_url, service_account_email=service_account_email,
                            headers=headers)
     return task
