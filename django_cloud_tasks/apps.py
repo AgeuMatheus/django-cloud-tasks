@@ -45,4 +45,4 @@ class DCTConfig(AppConfig):
 
     @classmethod
     def http_service_account(cls):
-        return cls._settings().get('http_service_account')
+        return cls._settings().get('service_account_email')
